@@ -112,6 +112,12 @@ scripts/ffxi-login-macos.sh              # log in
 scripts/ffxi-login-macos.sh --dry-run    # check the plumbing first
 ```
 
+To launch from Finder, Spotlight or the Dock, run `scripts/macos/make-launchers.sh`
+once. It creates `FFXI Login.command` and `FFXI Login (dry run).command` in
+`~/Applications`; Terminal opens them itself, so the 1Password CLI runs with
+Terminal's macOS permissions. Recent macOS silently blocks AppleScript and
+Automator applets from reading 1Password's data, so those do not work.
+
 **Lumoria (SteamOS, Bazzite)**
 
 ```sh
