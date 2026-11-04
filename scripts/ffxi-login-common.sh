@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# GUI launchers (Automator, AppleScript apps, Steam) start with a minimal PATH.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+
 CONFIG_FILE="${FFXI_LOGIN_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/ffxi-login/config}"
 if [[ -r "$CONFIG_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -27,13 +30,23 @@ if ! command -v op >/dev/null 2>&1; then
     exit 1
 fi
 
-emit_secrets() {
-    local pw otp=""
-    pw="$(op read "$OP_ITEM/$OP_PASSWORD_FIELD")"
-    if [[ -n "$OP_OTP_FIELD" ]]; then
-        otp="$(op read "$OP_ITEM/$OP_OTP_FIELD" 2>/dev/null || true)"
+# Fetches the secrets into FFXI_PW / FFXI_OTP (shell variables, not exported)
+# and aborts before anything is launched if 1Password cannot be read.
+fetch_secrets() {
+    FFXI_OTP=""
+    if ! FFXI_PW="$(op read "$OP_ITEM/$OP_PASSWORD_FIELD")"; then
+        echo "ffxi-login: could not read $OP_ITEM/$OP_PASSWORD_FIELD from 1Password" >&2
+        exit 1
     fi
-    printf '%s\n%s\n' "$pw" "$otp"
+    if [[ -n "$OP_OTP_FIELD" ]]; then
+        FFXI_OTP="$(op read "$OP_ITEM/$OP_OTP_FIELD" 2>/dev/null || true)"
+    fi
+}
+
+# Prints the secrets in the format ffxi-login.exe expects (printf is a builtin,
+# so they never appear in any process's arguments).
+emit_secrets() {
+    printf '%s\n%s\n' "$FFXI_PW" "$FFXI_OTP"
 }
 
 character_args() {

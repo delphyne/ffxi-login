@@ -25,6 +25,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ffxi-login-common.sh"
 # shellcheck disable=SC2206
 lumoria=($LUMORIA_CMD)
 mapfile -t char_args < <(character_args)
+fetch_secrets
 # Lumoria's --exe starts the program without arguments, so the exe also reads
 # options from FFXI_LOGIN_ARGS (non-secret). flatpak needs --env to forward it.
 extra_args="${char_args[*]} $*"

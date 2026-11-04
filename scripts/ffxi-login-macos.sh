@@ -18,4 +18,5 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ffxi-login-common.sh"
 [[ -f "$FFXI_LOGIN_EXE" ]] || { echo "ffxi-login: exe not found at $FFXI_LOGIN_EXE" >&2; exit 1; }
 
 mapfile -t char_args < <(character_args)
+fetch_secrets
 emit_secrets | "$CXSTART" --bottle "$CX_BOTTLE" "$FFXI_LOGIN_EXE" "${char_args[@]}" "$@"
