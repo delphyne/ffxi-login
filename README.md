@@ -1,160 +1,156 @@
-# FFXI-AutoLogin
+# ffxi-login
 
-**Created by: jaku  |  https://twitter.com/jaku**
+Automates the PlayOnline / Final Fantasy XI login without ever storing your
+Square Enix password on disk. A fork of
+[jaku/FFXI-autoPOL](https://github.com/jaku/FFXI-autoPOL) built for Wine
+hosts (CrossOver on macOS, Lumoria on SteamOS and Bazzite) with the password
+and one-time-password secret pulled from 1Password at launch time.
 
-## What is this?
-A simple tool to automate logging into Final Fantasy XI using either Windower or POL directly. It supports multiple characters and can be used to launch several accounts in sequence.
+## What changed from upstream
 
----
+- **No secrets in `config.json`.** Only the character name, PlayOnline slot,
+  Windower arguments and timing live there. Secrets are read from **standard
+  input**, one per line: the Square Enix password, then the TOTP secret or
+  `otpauth://` URI (blank if you have no security token). From a terminal you
+  are prompted instead, with echo off. The secrets are overwritten in memory
+  once typed.
+- **Typed, not pasted.** Upstream pastes the password via the Windows
+  clipboard; under Wine that clipboard is shared with the host desktop, so this
+  fork types it key by key (`typeDelay` ms per character).
+- **Wine aware.** Under Wine the prefix hosts file is left alone, because Wine
+  resolves names through the host. The one-line host entry below replaces it.
+- **`FFXI_LOGIN_ARGS`** supplies command-line options for launchers that
+  cannot pass arguments (Lumoria's `--exe`).
+- **`--dry-run`** reads the secrets, prints their lengths and the current TOTP
+  code, and exits without launching anything.
+- Cross-compiles with mingw-w64 (`make`), so the exe can be built on the Mac
+  or Linux box it will run from. The Visual Studio project is still there but
+  unmaintained.
 
-## How to Use (Most Users)
+Everything else (slot navigation, the `wh000.pol.com` proxy that skips the
+PlayOnline main menu, multi-character support, troubleshooting) is upstream's
+work; see its README for the long form.
 
-### 1. Place the EXE
-- Put `autoPOL.exe` in the same folder as your `pol.exe` or `Windower.exe`.
-  - For Windower users, this is usually your Windower install folder.
-  - For vanilla POL users, it's usually located in `C:\Program Files (x86)\PlayOnline\SquareEnix\PlayOnlineViewer`.
-
-### 2. First Run: Setup
-- Run `autoPOL.exe` (double-click or from command line).
-- On first run, it will walk you through creating a `config.json` file:
-  - You will enter a name for each character (no spaces, must be unique)
-  - Password
-  - TOTP secret (if you use one)
-  - Slot number (1-20)
-  - (Optional) Windower arguments (e.g. `-p="ProfileName"`)
-
-## How to get your TOTP Secret
-If you use a one-time password (TOTP) for your FFXI account, you will need the secret key:
-
-1. **Remove your current authenticator** from your Square Enix account.
-2. **Register a new authenticator**. When you get to the QR code select "Can't stand this image"
-3. Copy the secret provided on that page and use this value as your TOTP secret in the launcher setup.
-4. Done!
-
-Note: If you use any TOTP generator that remembers the secret (such as bitwarden), you can just copy that secret and do not need to forget the old one.
-
-#### Older steps on how to get your TOTP Secret
-1. **Remove your current authenticator** from your Square Enix account.
-2. **Register a new authenticator**. When you get to the QR code step, **save the QR code as a PNG file**.
-3. Go to: [https://iamyuthan.github.io/2FA-Solver/2FA-Solver.html](https://iamyuthan.github.io/2FA-Solver/2FA-Solver.html)
-4. Click on **QR Code (Image) Scanner/Decoder**.
-5. Select your saved QR code image and click **Decode**.
-6. In the decoded value, look for the part after `SECRET=`. It should be all capital letters. Use this value as your TOTP secret in the launcher setup.
-
-You will still want to register your new QR code in your authenicator app, but this way this application can now generate the required code when it goes to login.
-
-WARNING: This will open you up to a little more risk if your PC is compromised as your login info and 2FA secret would now be stored on the PC. But who really wants your FFXI account in 2025?
-
-### 3. Subsequent Runs: Login
-- Run `autoPOL.exe` again this time as admin.
-- If you have more than one character, you will be prompted to select which one to log in with.
-- If you only have one character, it will log in with that one automatically.
-- You can also skip the prompt by running:
-  ```
-  autoPOL.exe --character NAME
-  ```
-  Replace `NAME` with the character name you set up in the config.
-- To launch without the POL proxy for that run, add `--no-proxy`:
-  ```
-  autoPOL.exe --character NAME --no-proxy
-  ```
-- While the application is logging you in, your mouse and keyboard will be locked to prevent interfering with the process. This should only last about 5 seconds.
-- If it lasts longer than expected you can press Windows + L, or Ctrl+Alt+Del to disable the lock and resume control of your keyboard and mouse!
-
-
-
-### 4. Launching Multiple Accounts (Batch File)
-You can create a batch file (e.g. `start.bat`) to launch multiple characters. Example:
+## How it works
 
 ```
-autoPOL.exe --character jaku
-timeout /t 10
-autoPOL.exe --character jaku_mule
+op read ... ──pipe──▶ ffxi-login.exe (inside the Wine prefix)
+                        ├─ starts Windower.exe
+                        ├─ waits for the PlayOnline Viewer window
+                        ├─ picks the slot, types the password and TOTP code
+                        └─ serves one fake PML page so PlayOnline goes straight to the game
 ```
 
-- Adjust the timeout as needed for your PC (10 seconds is a good starting point).
-- Each line launches a different character/account.
+The host wrapper fetches the secrets with the 1Password CLI and pipes them in.
+A pipe is a private descriptor between the two processes, so the password
+never appears in a process list, in the environment, or in Lumoria's logs.
+Wine passes stdin through to Windows console programs (verified on CrossOver
+26.3; Lumoria inherits stdin when it spawns Wine).
 
+## Setup
 
-Some additional notes, if you have more than 4 characters this application can technically support this. Since you can store all of their details when you run the setup, however you will be responsible for managing your own login_w.bin files and setting them up in a way to use this application. But as an example you could have something like the following for the batch script.
+### 1. 1Password item
 
+Create an item (the wrappers default to vault `FFXI`, item `Square Enix`) with:
+
+- `password`: your **Square Enix account** password. This is what PlayOnline
+  asks for at login once the PlayOnline password itself has been saved in the
+  viewer, which is how the retail client works for everyone.
+- `one-time password`: only if you use a security token. Square Enix's token
+  registration offers "Other authenticator apps"; scan that QR code into
+  1Password (or paste the secret). `op read` returns an `otpauth://` URI and
+  the exe extracts the secret from it. Skip this field otherwise.
+
+Install the 1Password CLI and turn on **Settings → Developer → Integrate with
+1Password CLI** in the desktop app, so `op read` unlocks with Touch ID or the
+system authentication prompt.
+
+### 2. Build or download the exe
+
+```sh
+brew install mingw-w64        # macOS
+make                          # produces dist/ffxi-login.exe (32-bit, static)
 ```
-autoPOL.exe --character jaku
-timeout /t 10
-autoPOL.exe --character jaku_mule
-timeout /t 5
-copy "C:\Program Files (x86)\PlayOnline\SquareEnix\PlayOnlineViewer\usr\all\login_w.bin" "C:\Program Files (x86)\PlayOnline\SquareEnix\PlayOnlineViewer\usr\all\login_w.bin.org"
-copy "C:\Program Files (x86)\PlayOnline\SquareEnix\PlayOnlineViewer\usr\all\other.bin" "C:\Program Files (x86)\PlayOnline\SquareEnix\PlayOnlineViewer\usr\all\login_w.bin"
-timeout /t 10
-autoPOL.exe --character jaku_new
 
+### 3. Install into the prefix
+
+Copy `dist/ffxi-login.exe` **next to `Windower.exe`** (or `pol.exe`). Then,
+from a terminal, run the setup once to create `config.json`:
+
+```sh
+# macOS / CrossOver
+/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine --bottle ffxi \
+  "$HOME/Library/Application Support/CrossOver/Bottles/ffxi/drive_c/users/crossover/Desktop/ffxi-login.exe" --setup
 ```
 
-I cannot support multiboxing as I don't have experience doing it, but from what I understand the above example should provide enough information for those that know how to multibox to get started.
+Setup asks for the client region, the delay before typing starts, the delay
+between typed characters, and for each character a name, the PlayOnline slot
+(1-20; 5+ needs Windower) and optional Windower arguments. Nothing secret.
 
-One additional note is that there might be some issues with multiple POL processes, so extending the timeout from 10 seconds to 15 or 20 seconds might be needed for some setups. 
+### 4. Host entry for the main-menu skip
 
----
+PlayOnline loads its main menu over plain HTTP from `wh000.pol.com`; the exe
+answers that request locally with a page that jumps straight into the game.
+Point the name at loopback once per machine:
 
-## Other Notes
-
-This is all provided as is, I originally just built this to support my SteamDeck login and figured I'd share it for others. I'm 100% open to PRs and don't typically code in C++ for things like this. I know there could be some other improvements and so if there are bugs I will try to do what I can, but my time is limited and I already have a lot of side-projects.
-
-If you're on the Phoenix server, my main on there is Jakubowski, just waving hi sometime would be awesome.
-
----
-
-## Advanced: Building from Source
-
-1. Clone the repository.
-2. Open the project in Visual Studio (or use your preferred C++ build environment).
-3. Make sure you have the following dependencies:
-   - Windows SDK
-   - nlohmann/json (header-only)
-   - httplib.h (header-only)
-   - sha1.h (included)
-4. Build the project (Release x86 recommended).
-5. Place the resulting `autoPOL.exe` in your Windower or POL folder as above.
-
----
-
-## Troubleshooting
-
-### Login Issues
-
-- **Partial Character Entry**: If the program only enters some characters of your password, try increasing the delay in your configuration. Start by adding 1-2 seconds at a time until it works reliably.
-- **Starting 0 character**: If you notice the cursor when going to the password screen is starting on 0, and it's entering it as your password. Update your password to include the 0 (as a quick workaround) or try and adjust your timing as mentioned above.
-- **Controller Interference**: Some users have reported that having the controller enabled can cause key entry issues. Try disabling controller support to see if the error persists. (Controller support should work)
-- **Auto-Login in POL**: While the program supports auto-login, it's recommended to disable auto-login in the POL window as it can be unreliable. The program will handle the login process more reliably without auto-login.
-- **Locked keyboard/mouse**: If the application locks your keyboard and mouse and you can't control it after a long time, you can always press CTRL+ALT+DEL to regain control.
-
-### Linux/Steam Deck Users
-
-If you're using Linux or Steam Deck, you'll need to manually add an entry to your hosts file to get the autoPOL login to fully log you into the game after entering your password:
-
-```bash
+```sh
 echo "127.0.0.1 wh000.pol.com" | sudo tee -a /etc/hosts
 ```
 
-To remove this entry when you no longer want to use the program:
+While that line exists you must log in through this tool (or remove the line).
+Pass `--no-proxy` to skip the trick and click Play yourself.
 
-```bash
-sudo sed -i '/wh000.pol.com/d' /etc/hosts
+### 5. Wrapper
+
+Copy `scripts/config.example` to `~/.config/ffxi-login/config` and edit it.
+
+**macOS / CrossOver**
+
+```sh
+scripts/ffxi-login-macos.sh              # log in
+scripts/ffxi-login-macos.sh --dry-run    # check the plumbing first
 ```
 
-Note: While this entry is in your hosts file, you must use this program to log in, or login will fail. 
+**Lumoria (SteamOS, Bazzite)**
 
-Windows users do not need to do this.
+```sh
+flatpak run net.windower.Lumoria list    # find the prefix id
+LUMORIA_PREFIX=ffxi FFXI_LOGIN_EXE="$HOME/Games/Lumoria/ffxi/drive_c/.../Windower/ffxi-login.exe" \
+  scripts/ffxi-login-lumoria.sh --dry-run
+```
 
-### Reporting Issues
+Add the wrapper script as a non-Steam game to launch it from Gaming Mode.
+Note that the 1Password desktop-app integration unlocks through a polkit
+prompt, which Gaming Mode may not show; unlock 1Password in Desktop Mode
+first, or use a 1Password service account limited to a read-only vault that
+holds only this item.
 
-When reporting issues, please include:
-- Your version of autoPOL (try to use the latest version)
-- Your configuration details (delay settings, etc.)
-- Your operating system (Windows/Linux/Steam Deck)
-- What you've tried to resolve the issue
-- Any error messages you've received
+## Command line
 
----
+```
+ffxi-login.exe [--character NAME] [--no-proxy] [--dry-run] [--debug-keys]
+ffxi-login.exe --setup | --edit          (interactive, needs a terminal)
+```
 
-Enjoy! 
+Options may also be given in `FFXI_LOGIN_ARGS`, whitespace separated. With
+several characters configured and no terminal, `--character` is required.
+
+`config.json` keys: `delay` (ms before typing starts, default 3000),
+`typeDelay` (ms per typed character, default 20), `clientRegion` (`US`, `JP`,
+`EU`), and `accounts[]` with `name`, `slot`, `args`. A `password` or
+`totpSecret` key is ignored with a warning; delete them.
+
+## Troubleshooting
+
+- **Missing or extra characters in the password**: raise `delay` first, then
+  `typeDelay`. Upstream notes the cursor sometimes starts on the `0` key.
+- **Login stops at the PlayOnline main menu**: the `/etc/hosts` line is
+  missing or the proxy port (51304 US/EU, 51300 JP) is in use.
+- **Nothing is typed**: the viewer window must have focus; a controller that
+  is enabled in PlayOnline can interfere. Disable PlayOnline's own auto-login.
+- **`No password supplied on stdin`**: the wrapper's `op read` failed. Run
+  `op read "op://FFXI/Square Enix/password"` by hand to see the real error.
+
+## License
+
+MIT, as upstream. Original work by jaku; fork changes by Brian M. Carr.

@@ -1,0 +1,12 @@
+# Copy to ~/.config/ffxi-login/config and adjust. Plain shell assignments; no secrets here.
+OP_ITEM="op://FFXI/Square Enix"
+OP_PASSWORD_FIELD="password"
+OP_OTP_FIELD="one-time password"   # set to "" if you do not use a security token
+CHARACTER=""                        # name from config.json; leave empty with a single account
+
+# macOS / CrossOver
+CX_BOTTLE="ffxi"
+
+# Linux / Lumoria
+#LUMORIA_PREFIX="ffxi"
+#FFXI_LOGIN_EXE="$HOME/Games/Lumoria/ffxi/drive_c/Program Files (x86)/Windower/ffxi-login.exe"

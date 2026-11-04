@@ -1,4 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
 #include <windows.h>
 #include <shlwapi.h>
 #include <winsock2.h>
@@ -18,16 +21,16 @@
 #include <cctype>
 #include <algorithm>
 #include <nlohmann/json.hpp>
-#include "httplib.h"
+#include <io.h>
 #include <process.h>
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <mutex>
 #include <atomic>
 
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "psapi.lib")
+// #pragma comment(lib, "ws2_32.lib")
+// #pragma comment(lib, "shlwapi.lib")
+// #pragma comment(lib, "psapi.lib")
 
 using json = nlohmann::json;
 
@@ -66,6 +69,7 @@ struct AccountConfig {
 
 struct GlobalConfig {
     int delay;
+    int typeDelay; // ms between characters when typing the password
     bool POLProxy;
     std::string clientRegion; // "US" or "JP" or "EU"
     std::vector<AccountConfig> accounts;
@@ -155,6 +159,101 @@ std::string generate_totp(const std::string& secret_base32) {
     snprintf(buf, sizeof(buf), "%06d", code);
     return std::string(buf);
 }
+
+// ---- ffxi-login additions -------------------------------------------------
+
+// True when running under Wine/CrossOver/Proton. Wine's winsock resolves names
+// through the host resolver, so the prefix's hosts file is ignored there.
+bool isWine() {
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    return ntdll && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+}
+
+bool stdinIsTerminal() {
+    return _isatty(_fileno(stdin)) != 0;
+}
+
+std::string trimLine(std::string v) {
+    v.erase(0, v.find_first_not_of(" \t\r\n"));
+    v.erase(v.find_last_not_of(" \t\r\n") + 1);
+    return v;
+}
+
+// Overwrite a secret before the string is freed (best effort).
+void wipeString(std::string& v) {
+    if (!v.empty()) SecureZeroMemory(&v[0], v.size());
+    v.clear();
+}
+
+// Accepts either a bare base32 secret or an otpauth:// URI (what
+// `op read "op://vault/item/one-time password"` prints) and returns the
+// base32 secret with whitespace removed.
+std::string extractTotpSecret(const std::string& raw) {
+    std::string v = trimLine(raw);
+    if (v.rfind("otpauth://", 0) == 0) {
+        size_t q = v.find('?');
+        std::string query = (q == std::string::npos) ? "" : v.substr(q + 1);
+        std::string out;
+        std::stringstream ss(query);
+        std::string kv;
+        while (std::getline(ss, kv, '&')) {
+            if (kv.rfind("secret=", 0) == 0) { out = kv.substr(7); break; }
+        }
+        // URL-decode (%20, +)
+        std::string decoded;
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (out[i] == '%' && i + 2 < out.size() && std::isxdigit((unsigned char)out[i + 1]) && std::isxdigit((unsigned char)out[i + 2])) {
+                decoded += (char)std::stoi(out.substr(i + 1, 2), nullptr, 16);
+                i += 2;
+            } else if (out[i] == '+') {
+                decoded += ' ';
+            } else {
+                decoded += out[i];
+            }
+        }
+        v = decoded;
+    }
+    v.erase(std::remove_if(v.begin(), v.end(), [](unsigned char c) { return std::isspace(c) || c == '-' || c == '='; }), v.end());
+    std::transform(v.begin(), v.end(), v.begin(), ::toupper);
+    return v;
+}
+
+// Reads the Square Enix password (line 1) and optional TOTP secret or
+// otpauth URI (line 2) from standard input. When stdin is a terminal the
+// user is prompted with echo turned off; when it is a pipe the lines are read
+// silently so a host wrapper can feed them straight from a password manager.
+bool readSecretsFromStdin(AccountConfig& account) {
+    bool tty = stdinIsTerminal();
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    bool echoOff = false;
+    if (tty && GetConsoleMode(hIn, &mode)) {
+        echoOff = SetConsoleMode(hIn, mode & ~ENABLE_ECHO_INPUT) != 0;
+    }
+    std::string line;
+    if (tty) std::cout << "Square Enix password: " << std::flush;
+    if (!std::getline(std::cin, line)) {
+        if (echoOff) SetConsoleMode(hIn, mode);
+        std::cerr << "No password supplied on stdin.\n";
+        return false;
+    }
+    account.password = trimLine(line);
+    wipeString(line);
+    if (tty) std::cout << "\nTOTP secret or otpauth URI (empty if not using): " << std::flush;
+    if (std::getline(std::cin, line)) {
+        account.totpSecret = extractTotpSecret(line);
+        wipeString(line);
+    }
+    if (tty) std::cout << "\n";
+    if (echoOff) SetConsoleMode(hIn, mode);
+    if (account.password.empty()) {
+        std::cerr << "Password is empty.\n";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 
 void simulateKey(WORD vk, bool shift = false) {
     INPUT inputs[4] = {};
@@ -345,13 +444,12 @@ std::string readConfigFile(const std::string& path) {
 void writeConfigFile(const std::string& path, const GlobalConfig& config) {
     json j;
     j["delay"] = config.delay;
+    j["typeDelay"] = config.typeDelay;
     j["clientRegion"] = config.clientRegion;
     json accounts = json::array();
     for (const auto& account : config.accounts) {
         json acc;
         acc["name"] = account.name;
-        acc["password"] = account.password;
-        acc["totpSecret"] = account.totpSecret;
         acc["slot"] = account.slot;
         acc["args"] = account.args;
         accounts.push_back(acc);
@@ -365,6 +463,8 @@ GlobalConfig loadConfig(const std::string& path) {
     GlobalConfig config;
     config.POLProxy = true;
     std::string content = readConfigFile(path);
+    config.delay = 3000;
+    config.typeDelay = 20;
     if (content.empty()) {
         config.clientRegion = "US"; // Default to US
         return config;
@@ -372,13 +472,16 @@ GlobalConfig loadConfig(const std::string& path) {
     try {
         json j = json::parse(content);
         config.delay = j.value("delay", 3000);
+        config.typeDelay = j.value("typeDelay", 20);
         config.clientRegion = j.value("clientRegion", "US"); // Default to US if not set
         if (j.contains("accounts")) {
             for (const auto& acc : j["accounts"]) {
                 AccountConfig account;
                 account.name = acc.value("name", "");
-                account.password = acc["password"];
-                account.totpSecret = acc["totpSecret"];
+                if (acc.contains("password") || acc.contains("totpSecret")) {
+                    std::cerr << "WARNING: config.json contains a password or TOTP secret for '" << account.name
+                              << "'. This fork ignores them; secrets are read from stdin. Remove them from the file.\n";
+                }
                 account.slot = acc["slot"];
                 account.args = acc.value("args", "");
                 config.accounts.push_back(account);
@@ -419,6 +522,13 @@ void setupConfig(GlobalConfig& config) {
         int val = std::stoi(input);
         if (val >= 1 && val <= 20) config.delay = val * 1000;
     }
+    std::cout << "Delay between typed password characters (in ms, default 20): ";
+    std::getline(std::cin, input);
+    config.typeDelay = 20;
+    if (!input.empty() && std::all_of(input.begin(), input.end(), ::isdigit)) {
+        int val = std::stoi(input);
+        if (val >= 1 && val <= 500) config.typeDelay = val;
+    }
     int numAccounts = 0;
     while (true) {
         std::cout << "How many characters do you want to set up? ";
@@ -453,10 +563,6 @@ void setupConfig(GlobalConfig& config) {
             }
             break;
         }
-        std::cout << "Password: ";
-        std::getline(std::cin, account.password);
-        std::cout << "TOTP Secret (leave empty if not using): ";
-        std::getline(std::cin, account.totpSecret);
         // Slot (1-4)
         while (true) {
             std::cout << "POL Slot number (1-20): ";
@@ -557,7 +663,7 @@ void defocusExistingPOL() {
     }
 }
 
-void launchAccount(const AccountConfig& account, const GlobalConfig& config) {
+void launchAccount(AccountConfig& account, const GlobalConfig& config) {
     // Determine port based on client region
     int port = [&]() {
         if (config.clientRegion == "JP") return 51300;
@@ -591,7 +697,9 @@ void launchAccount(const AccountConfig& account, const GlobalConfig& config) {
                     std::cerr << "POL Redirect won't work: Port " << port << " is already in use (Error: " << error << ")\n";
                 } else {
                     portAvailable = true;
-                    if (config.POLProxy) {
+                    if (config.POLProxy && isWine()) {
+                        std::cout << "Running under Wine: not touching the prefix hosts file. Make sure the host /etc/hosts maps wh000.pol.com to 127.0.0.1.\n";
+                    } else if (config.POLProxy) {
                         addHostsEntry("127.0.0.1");
                         hostsEntryAdded = true;
                     }
@@ -801,8 +909,9 @@ void launchAccount(const AccountConfig& account, const GlobalConfig& config) {
     Sleep(25);
     simulateKey(VK_BACK);
 
-    //sendText(hwnd, account.password, 5);
-    copyAndPasteText(hwnd, account.password);
+    // Type the password key by key. The upstream clipboard paste is avoided
+    // because under Wine the clipboard is shared with the host desktop.
+    sendText(hwnd, account.password, config.typeDelay);
 
     Sleep(300);
 
@@ -828,6 +937,9 @@ void launchAccount(const AccountConfig& account, const GlobalConfig& config) {
     Sleep(500);
 
     BlockInput(FALSE);
+
+    wipeString(account.password);
+    wipeString(account.totpSecret);
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
@@ -1032,18 +1144,6 @@ bool editConfig(GlobalConfig& config) {
                     if (!input.empty()) {
                         acc.name = input;
                     }
-                    std::cout << "Current password: " << acc.password << "\n";
-                    std::cout << "New password (leave empty to keep current): ";
-                    std::getline(std::cin, input);
-                    if (!input.empty()) {
-                        acc.password = input;
-                    }
-                    std::cout << "Current TOTP secret: " << acc.totpSecret << "\n";
-                    std::cout << "New TOTP secret (leave empty to keep current): ";
-                    std::getline(std::cin, input);
-                    if (!input.empty()) {
-                        acc.totpSecret = input;
-                    }
                     std::cout << "Current slot: " << acc.slot << "\n";
                     std::cout << "New slot (1-4, leave empty to keep current): ";
                     std::getline(std::cin, input);
@@ -1067,10 +1167,6 @@ bool editConfig(GlobalConfig& config) {
             std::cout << "\nAdding new character:\n";
             std::cout << "Character name (no spaces, unique): ";
             std::getline(std::cin, newAcc.name);
-            std::cout << "Password: ";
-            std::getline(std::cin, newAcc.password);
-            std::cout << "TOTP Secret (leave empty if not using): ";
-            std::getline(std::cin, newAcc.totpSecret);
             std::cout << "POL Slot number (1-4): ";
             std::getline(std::cin, input);
             if (!input.empty() && std::all_of(input.begin(), input.end(), ::isdigit)) {
@@ -1166,16 +1262,46 @@ void removeHostsEntry() {
 }
 
 // Update main to remove hosts entry before exiting
+void printUsage() {
+    std::cout <<
+        "Usage: ffxi-login.exe [--character NAME] [--no-proxy] [--dry-run] [--debug-keys]\n"
+        "       ffxi-login.exe --setup | --edit      (interactive, needs a terminal)\n"
+        "\n"
+        "Secrets are never stored. Feed them on standard input, one per line:\n"
+        "  line 1: Square Enix account password\n"
+        "  line 2: TOTP secret or otpauth:// URI (optional; blank if no one-time password)\n"
+        "e.g.  { op read 'op://FFXI/Square Enix/password'; op read 'op://FFXI/Square Enix/one-time password'; } | ffxi-login.exe --character NAME\n"
+        "When stdin is a terminal you are prompted instead (echo off).\n"
+        "\n"
+        "  --dry-run    read and validate the secrets, print a TOTP code if one is configured, and exit\n";
+}
+
 int main(int argc, char* argv[]) {
-    std::cout << "Created by: jaku | https://twitter.com/jaku\n";
-    std::cout << "Version: 0.0.23  | https://github.com/jaku/FFXI-autoPOL\n";
+    std::cout << "ffxi-login (fork of FFXI-autoPOL by jaku, https://github.com/jaku/FFXI-autoPOL)\n";
+    std::cout << "Version: 0.0.23-op.1 | https://github.com/delphyne/ffxi-login\n";
     DEBUG_KEY_PRESSES = false;
+    bool dryRun = false;
+
+    // Arguments come from the command line plus FFXI_LOGIN_ARGS (whitespace
+    // separated), for launchers such as Lumoria that cannot pass arguments.
+    std::vector<std::string> args(argv + 1, argv + argc);
+    if (const char* extra = getenv("FFXI_LOGIN_ARGS")) {
+        std::stringstream ss(extra);
+        std::string tok;
+        while (ss >> tok) args.push_back(tok);
+    }
+
     // Parse command line arguments
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+    for (size_t i = 0; i < args.size(); i++) {
+        std::string arg = args[i];
         if (arg == "--debug-keys") {
             DEBUG_KEY_PRESSES = true;
             std::cout << "Key press logging enabled\n";
+        } else if (arg == "--dry-run") {
+            dryRun = true;
+        } else if (arg == "--help" || arg == "-h" || arg == "/?") {
+            printUsage();
+            return 0;
         }
     }
     
@@ -1192,20 +1318,20 @@ int main(int argc, char* argv[]) {
     bool editMode = false;
     std::string characterName;
     // Parse command line arguments
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+    for (size_t i = 0; i < args.size(); i++) {
+        std::string arg = args[i];
         if (arg == "--setup") {
             setupMode = true;
         } else if (arg == "--edit") {
             editMode = true;
-        } else if (arg == "--character" && i + 1 < argc) {
-            characterName = argv[++i];
+        } else if (arg == "--character" && i + 1 < args.size()) {
+            characterName = args[++i];
         } else if (arg == "--no-proxy") {
             config.POLProxy = false;
-        } else if (arg == "--windower-arg" && i + 1 < argc) {
+        } else if (arg == "--windower-arg" && i + 1 < args.size()) {
             for (auto& acc : config.accounts) {
                 if (_stricmp(acc.name.c_str(), characterName.c_str()) == 0) {
-                    acc.args = argv[++i];
+                    acc.args = args[++i];
                     break;
                 }
             }
@@ -1213,10 +1339,15 @@ int main(int argc, char* argv[]) {
     }
 
     // Clean up any existing hosts file entries at startup
-    if (config.POLProxy) {
+    if (config.POLProxy && !isWine()) {
         removeHostsEntry();
     }
 
+    bool interactive = stdinIsTerminal();
+    if ((setupMode || editMode || config.accounts.empty()) && !interactive) {
+        std::cerr << "No accounts configured (or --setup/--edit requested) but stdin is not a terminal. Run --setup from a terminal first.\n";
+        return 1;
+    }
     if (setupMode || config.accounts.empty()) {
         setupConfig(config);
         writeConfigFile(configPath, config);
@@ -1237,6 +1368,10 @@ int main(int argc, char* argv[]) {
     // Main loop for character selection and editing
     while (true) {
         // If more than one account and no character specified, prompt user
+        if (characterName.empty() && config.accounts.size() > 1 && !interactive) {
+            std::cerr << "Several characters are configured and stdin is not a terminal: pass --character NAME.\n";
+            return 1;
+        }
         if (characterName.empty() && config.accounts.size() > 1) {
             std::cout << "\nSelect a character to log in with:\n";
             for (size_t i = 0; i < config.accounts.size(); ++i) {
@@ -1295,6 +1430,23 @@ int main(int argc, char* argv[]) {
         if (!toLaunch) {
             std::cout << "No account found for requested character name.\n";
             return 1;
+        }
+
+        if (!readSecretsFromStdin(*toLaunch)) {
+            return 1;
+        }
+        if (dryRun) {
+            std::cout << "Dry run for '" << toLaunch->name << "' (slot " << toLaunch->slot << ")\n";
+            std::cout << "  password: " << toLaunch->password.size() << " characters\n";
+            if (toLaunch->totpSecret.empty()) {
+                std::cout << "  one-time password: not configured\n";
+            } else {
+                std::cout << "  TOTP secret: " << toLaunch->totpSecret.size() << " base32 characters, current code " << generate_totp(toLaunch->totpSecret) << "\n";
+            }
+            std::cout << "  wine: " << (isWine() ? "yes" : "no") << ", proxy: " << (config.POLProxy ? "on" : "off") << ", type delay: " << config.typeDelay << " ms\n";
+            wipeString(toLaunch->password);
+            wipeString(toLaunch->totpSecret);
+            return 0;
         }
         if (!config.POLProxy) {
             launchAccount(*toLaunch, config);
