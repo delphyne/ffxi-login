@@ -70,6 +70,8 @@ struct AccountConfig {
 struct GlobalConfig {
     int delay;
     int typeDelay; // ms between characters when typing the password
+    bool renameWindow; // retitle the POL window "PlayOnline Viewer - <name>" (upstream multibox aid)
+    bool waitForExit;  // keep running until the POL process exits
     bool POLProxy;
     std::string clientRegion; // "US" or "JP" or "EU"
     std::vector<AccountConfig> accounts;
@@ -409,6 +411,7 @@ void addHostsEntry(const std::string& ip) {
 struct WindowSearchData {
     const std::wstring* username;
     HWND* foundHwnd;
+    bool rename;
 };
 
 BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam) {
@@ -416,10 +419,12 @@ BOOL CALLBACK EnumWindowsProc(HWND hWnd, LPARAM lParam) {
     GetWindowTextW(hWnd, title, sizeof(title) / sizeof(wchar_t));
     if (wcsncmp(title, L"PlayOnline Viewer", 17) == 0) {
         WindowSearchData* data = reinterpret_cast<WindowSearchData*>(lParam);
-        // Create a new title with username only
-        std::wstring newTitle = L"PlayOnline Viewer - ";
-        newTitle += *(data->username);
-        SetWindowTextW(hWnd, newTitle.c_str());
+        if (data->rename) {
+            // Create a new title with username only
+            std::wstring newTitle = L"PlayOnline Viewer - ";
+            newTitle += *(data->username);
+            SetWindowTextW(hWnd, newTitle.c_str());
+        }
         // Bring this window to the front and focus it
         SetForegroundWindow(hWnd);
         SetActiveWindow(hWnd);
@@ -446,6 +451,8 @@ void writeConfigFile(const std::string& path, const GlobalConfig& config) {
     j["delay"] = config.delay;
     j["typeDelay"] = config.typeDelay;
     j["proxy"] = config.POLProxy;
+    j["renameWindow"] = config.renameWindow;
+    j["waitForExit"] = config.waitForExit;
     j["clientRegion"] = config.clientRegion;
     json accounts = json::array();
     for (const auto& account : config.accounts) {
@@ -466,6 +473,8 @@ GlobalConfig loadConfig(const std::string& path) {
     std::string content = readConfigFile(path);
     config.delay = 3000;
     config.typeDelay = 20;
+    config.renameWindow = false;
+    config.waitForExit = false;
     if (content.empty()) {
         config.clientRegion = "US"; // Default to US
         return config;
@@ -475,6 +484,8 @@ GlobalConfig loadConfig(const std::string& path) {
         config.delay = j.value("delay", 3000);
         config.typeDelay = j.value("typeDelay", 20);
         config.POLProxy = j.value("proxy", true);
+        config.renameWindow = j.value("renameWindow", false);
+        config.waitForExit = j.value("waitForExit", false);
         config.clientRegion = j.value("clientRegion", "US"); // Default to US if not set
         if (j.contains("accounts")) {
             for (const auto& acc : j["accounts"]) {
@@ -674,9 +685,11 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
         }();
 
     // Check if the port can be opened
-    SOCKET testSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    SOCKET testSocket = config.POLProxy ? socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) : INVALID_SOCKET;
     bool portAvailable = false;
-    if (testSocket == INVALID_SOCKET) {
+    if (!config.POLProxy) {
+        // no proxy, no port check
+    } else if (testSocket == INVALID_SOCKET) {
         std::cerr << "Failed to create socket for port check.\n";
     } else {
         sockaddr_in serverAddr;
@@ -743,7 +756,7 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
     // Convert username to wide string for window title
     std::wstring wUsername(account.name.begin(), account.name.end());
     HWND hwnd = nullptr;
-    WindowSearchData searchData = { &wUsername, &hwnd };
+    WindowSearchData searchData = { &wUsername, &hwnd, config.renameWindow };
     for (int i = 0; i < 60 && !hwnd; ++i) {
         EnumWindows(EnumWindowsProc, (LPARAM)&searchData);
         if (!hwnd) Sleep(500);
@@ -942,6 +955,19 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
 
     wipeString(account.password);
     wipeString(account.totpSecret);
+
+    if (config.waitForExit) {
+        DWORD polPid = 0;
+        GetWindowThreadProcessId(hwnd, &polPid);
+        HANDLE hPol = polPid ? OpenProcess(SYNCHRONIZE, FALSE, polPid) : NULL;
+        std::cout << "Waiting for PlayOnline (pid " << polPid << ") to exit...\n";
+        if (hPol) {
+            WaitForSingleObject(hPol, INFINITE);
+            CloseHandle(hPol);
+        } else {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+        }
+    }
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
