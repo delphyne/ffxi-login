@@ -445,6 +445,7 @@ void writeConfigFile(const std::string& path, const GlobalConfig& config) {
     json j;
     j["delay"] = config.delay;
     j["typeDelay"] = config.typeDelay;
+    j["proxy"] = config.POLProxy;
     j["clientRegion"] = config.clientRegion;
     json accounts = json::array();
     for (const auto& account : config.accounts) {
@@ -473,6 +474,7 @@ GlobalConfig loadConfig(const std::string& path) {
         json j = json::parse(content);
         config.delay = j.value("delay", 3000);
         config.typeDelay = j.value("typeDelay", 20);
+        config.POLProxy = j.value("proxy", true);
         config.clientRegion = j.value("clientRegion", "US"); // Default to US if not set
         if (j.contains("accounts")) {
             for (const auto& acc : j["accounts"]) {

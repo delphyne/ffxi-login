@@ -98,7 +98,8 @@ echo "127.0.0.1 wh000.pol.com" | sudo tee -a /etc/hosts
 ```
 
 While that line exists you must log in through this tool (or remove the line).
-Pass `--no-proxy` to skip the trick and click Play yourself.
+If you would rather click Play yourself, skip this step and set `"proxy": false`
+in `config.json` (or pass `--no-proxy`).
 
 ### 5. Wrapper
 
@@ -136,8 +137,9 @@ Options may also be given in `FFXI_LOGIN_ARGS`, whitespace separated. With
 several characters configured and no terminal, `--character` is required.
 
 `config.json` keys: `delay` (ms before typing starts, default 3000),
-`typeDelay` (ms per typed character, default 20), `clientRegion` (`US`, `JP`,
-`EU`), and `accounts[]` with `name`, `slot`, `args`. A `password` or
+`typeDelay` (ms per typed character, default 20), `proxy` (`false` to leave
+the PlayOnline main menu alone and click Play yourself; no hosts entry needed),
+`clientRegion` (`US`, `JP`, `EU`), and `accounts[]` with `name`, `slot`, `args`. A `password` or
 `totpSecret` key is ignored with a warning; delete them.
 
 ## Troubleshooting
