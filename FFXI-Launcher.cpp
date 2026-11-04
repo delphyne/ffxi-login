@@ -748,7 +748,10 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
         cmdline += " " + account.args;
     }
 
-    if (!CreateProcessA(NULL, (LPSTR)cmdline.c_str(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+    // Start Windower/POL in its own folder: Windower reads and writes settings.xml
+    // relative to the working directory, and a host launcher (cxstart, Lumoria)
+    // may have left us somewhere else entirely.
+    if (!CreateProcessA(NULL, (LPSTR)cmdline.c_str(), NULL, NULL, FALSE, 0, NULL, baseDir.c_str(), &si, &pi)) {
         std::cerr << "Failed to launch, try running as admin.\n";
         return;
     }
@@ -1340,6 +1343,7 @@ int main(int argc, char* argv[]) {
     GetModuleFileNameA(NULL, exePath, MAX_PATH);
     PathRemoveFileSpecA(exePath);
     std::string baseDir = exePath;
+    SetCurrentDirectoryA(baseDir.c_str());
     std::string configPath = baseDir + "\\config.json";
     GlobalConfig config = loadConfig(configPath);
     bool setupMode = false;
