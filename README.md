@@ -149,8 +149,11 @@ the PlayOnline main menu alone and click Play yourself; no hosts entry needed),
 PlayOnline window after Windower starts, default 0 = wait until you press Play),
 `renameWindow` (retitle the PlayOnline window, default `false`), `waitForExit`
 (stay running until PlayOnline exits, default `false`), and `accounts[]` with
-`name`, `slot`, `args`. A `password` or `totpSecret` key is ignored with a
-warning; delete them.
+`name`, `slot`, `args`. `args` is appended to the Windower command line:
+`--profile <name>` (or `-p`) skips the Windower launcher and starts the game
+with that profile; for the unnamed default profile use `"args": "--profile \"\""`.
+See https://docs.windower.net/cli for the full list. A `password` or
+`totpSecret` key is ignored with a warning; delete them.
 
 ## Troubleshooting
 
