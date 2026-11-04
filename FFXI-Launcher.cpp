@@ -783,6 +783,11 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
         Sleep(500);
     }
 
+    if (hwnd) {
+        DWORD polPidFound = 0;
+        GetWindowThreadProcessId(hwnd, &polPidFound);
+        std::cout << "PlayOnline window found (pid " << polPidFound << ") after " << (GetTickCount() - waitStart) / 1000 << " s" << std::endl;
+    }
     if (!hwnd) {
         std::cerr << "Could not find POL window after " << config.launchTimeout << " s\n";
         CloseHandle(pi.hProcess);
@@ -947,7 +952,13 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
 
     // Type the password key by key. The upstream clipboard paste is avoided
     // because under Wine the clipboard is shared with the host desktop.
+    std::cout << "Typing password (" << account.password.size() << " characters, POL auto-login "
+              << (autoLoginEnabled ? "on" : "off") << ", slot byte " << loginWValue << ")" << std::endl;
     sendText(hwnd, account.password, config.typeDelay);
+    if (GetForegroundWindow() != hwnd) {
+        std::cout << "Note: the PlayOnline window was not in the foreground after typing" << std::endl;
+    }
+    std::cout << "Password typed; sending Enter" << std::endl;
 
     Sleep(300);
 
@@ -973,6 +984,7 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
     Sleep(500);
 
     BlockInput(FALSE);
+    std::cout << "Login sequence finished" << std::endl;
 
     wipeString(account.password);
     wipeString(account.totpSecret);
@@ -1356,6 +1368,7 @@ int main(int argc, char* argv[]) {
     
     // Register console control handler to clean up on termination
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+    std::cout.setf(std::ios::unitbuf); // flush every write: stdout is usually a pipe to a log
     
     char exePath[MAX_PATH];
     GetModuleFileNameA(NULL, exePath, MAX_PATH);
