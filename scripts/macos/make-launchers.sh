@@ -10,16 +10,22 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 dir="${1:-$HOME/Applications}"
 mkdir -p "$dir"
+log="$HOME/Library/Logs/ffxi-login.log"
 make_one() {
-    local file="$1" args="$2"
+    local file="$1" args="$2" pause="$3"
     cat > "$file" <<CMD
 #!/bin/bash
-'$repo/scripts/ffxi-login-macos.sh' $args
+# Output is also appended to $log
+'$repo/scripts/ffxi-login-macos.sh' $args 2>&1 | tee -a '$log'
 echo
-echo "[ffxi-login finished; you can close this window]"
 CMD
+    if [[ $pause == pause ]]; then
+        printf 'read -n 1 -r -s -p "[ffxi-login finished; press any key to close]"\n' >> "$file"
+    else
+        printf 'echo "[ffxi-login finished]"\n' >> "$file"
+    fi
     chmod +x "$file"
     echo "Created $file"
 }
-make_one "$dir/FFXI Login.command" ""
-make_one "$dir/FFXI Login (dry run).command" "--dry-run"
+make_one "$dir/FFXI Login.command" "" close
+make_one "$dir/FFXI Login (dry run).command" "--dry-run" pause
