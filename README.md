@@ -145,8 +145,12 @@ several characters configured and no terminal, `--character` is required.
 `config.json` keys: `delay` (ms before typing starts, default 3000),
 `typeDelay` (ms per typed character, default 20), `proxy` (`false` to leave
 the PlayOnline main menu alone and click Play yourself; no hosts entry needed),
-`clientRegion` (`US`, `JP`, `EU`), and `accounts[]` with `name`, `slot`, `args`. A `password` or
-`totpSecret` key is ignored with a warning; delete them.
+`clientRegion` (`US`, `JP`, `EU`), `launchTimeout` (seconds to wait for the
+PlayOnline window after Windower starts, default 0 = wait until you press Play),
+`renameWindow` (retitle the PlayOnline window, default `false`), `waitForExit`
+(stay running until PlayOnline exits, default `false`), and `accounts[]` with
+`name`, `slot`, `args`. A `password` or `totpSecret` key is ignored with a
+warning; delete them.
 
 ## Troubleshooting
 

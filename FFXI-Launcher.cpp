@@ -72,6 +72,7 @@ struct GlobalConfig {
     int typeDelay; // ms between characters when typing the password
     bool renameWindow; // retitle the POL window "PlayOnline Viewer - <name>" (upstream multibox aid)
     bool waitForExit;  // keep running until the POL process exits
+    int launchTimeout; // seconds to wait for the POL window after launching Windower; 0 = forever
     bool POLProxy;
     std::string clientRegion; // "US" or "JP" or "EU"
     std::vector<AccountConfig> accounts;
@@ -453,6 +454,7 @@ void writeConfigFile(const std::string& path, const GlobalConfig& config) {
     j["proxy"] = config.POLProxy;
     j["renameWindow"] = config.renameWindow;
     j["waitForExit"] = config.waitForExit;
+    j["launchTimeout"] = config.launchTimeout;
     j["clientRegion"] = config.clientRegion;
     json accounts = json::array();
     for (const auto& account : config.accounts) {
@@ -475,6 +477,7 @@ GlobalConfig loadConfig(const std::string& path) {
     config.typeDelay = 20;
     config.renameWindow = false;
     config.waitForExit = false;
+    config.launchTimeout = 0;
     if (content.empty()) {
         config.clientRegion = "US"; // Default to US
         return config;
@@ -486,6 +489,7 @@ GlobalConfig loadConfig(const std::string& path) {
         config.POLProxy = j.value("proxy", true);
         config.renameWindow = j.value("renameWindow", false);
         config.waitForExit = j.value("waitForExit", false);
+        config.launchTimeout = j.value("launchTimeout", 0);
         config.clientRegion = j.value("clientRegion", "US"); // Default to US if not set
         if (j.contains("accounts")) {
             for (const auto& acc : j["accounts"]) {
@@ -760,13 +764,27 @@ void launchAccount(AccountConfig& account, const GlobalConfig& config) {
     std::wstring wUsername(account.name.begin(), account.name.end());
     HWND hwnd = nullptr;
     WindowSearchData searchData = { &wUsername, &hwnd, config.renameWindow };
-    for (int i = 0; i < 60 && !hwnd; ++i) {
+    // Windower shows its launcher first; the user may take their time there,
+    // so poll until the PlayOnline window exists (or launchTimeout elapses).
+    std::cout << "Waiting for the PlayOnline window";
+    if (config.launchTimeout > 0) std::cout << " (up to " << config.launchTimeout << " s)";
+    std::cout << "; press Play in Windower when ready..." << std::endl;
+    DWORD waitStart = GetTickCount();
+    DWORD lastNote = waitStart;
+    for (;;) {
         EnumWindows(EnumWindowsProc, (LPARAM)&searchData);
-        if (!hwnd) Sleep(500);
+        if (hwnd) break;
+        DWORD waited = GetTickCount() - waitStart;
+        if (config.launchTimeout > 0 && waited >= (DWORD)config.launchTimeout * 1000) break;
+        if (GetTickCount() - lastNote >= 30000) {
+            std::cout << "Still waiting for PlayOnline (" << waited / 1000 << " s)..." << std::endl;
+            lastNote = GetTickCount();
+        }
+        Sleep(500);
     }
 
     if (!hwnd) {
-        std::cerr << "Could not find POL window\n";
+        std::cerr << "Could not find POL window after " << config.launchTimeout << " s\n";
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         return;
